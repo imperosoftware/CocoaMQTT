@@ -134,6 +134,42 @@ protocol CocoaMQTTClient {
     /* PUBLISH/SUBSCRIBE */
 }
 
+fileprivate final class MessageQueue {
+
+     struct Message {
+         let id: UInt16
+         let message: CocoaMQTTMessage
+     }
+
+     private var messages: [Message] = []
+
+     func has(_ id: UInt16) -> Bool {
+         !messages.filter({ $0.id == id }).isEmpty
+     }
+
+     func has(_ message: CocoaMQTTMessage) -> Bool {
+         messages.first(where: { $0.message == message }) != nil
+     }
+
+     func add(_ message: CocoaMQTTMessage, with id: UInt16) {
+         remove(for: id)
+         messages.append(.init(id: id, message: message))
+     }
+
+     func remove(for id: UInt16) {
+         messages.removeAll(where: { $0.id == id })
+     }
+
+     func forEach(_ body: (UInt16, CocoaMQTTMessage) -> Void) {
+         messages.forEach {
+             body($0.id, $0.message)
+         }
+     }
+
+     func message(for id: UInt16) -> CocoaMQTTMessage? {
+         messages.first(where: { $0.id == id })?.message
+     }
+ }
 
 /// MQTT Client
 ///
@@ -267,7 +303,7 @@ public class CocoaMQTT: NSObject, CocoaMQTTClient {
     
 
     /// Sending messages
-    fileprivate var sendingMessages: [UInt16: CocoaMQTTMessage] = [:]
+    fileprivate var sendingMessages: MessageQueue = .init()
 
     /// message id counter
     private var _msgid: UInt16 = 0
@@ -454,13 +490,13 @@ public class CocoaMQTT: NSObject, CocoaMQTTClient {
         frame.retained = message.retained
         
         delegateQueue.async {
-            self.sendingMessages[msgid] = message
+            self.sendingMessages.add(message, with: msgid)
         }
 
         // Push frame to deliver message queue
         guard deliver.add(frame) else {
             delegateQueue.async {
-                self.sendingMessages.removeValue(forKey: msgid)
+                self.sendingMessages.remove(for: msgid)
             }
             return -1
         }
@@ -514,7 +550,7 @@ extension CocoaMQTT: CocoaMQTTDeliverProtocol {
     func deliver(_ deliver: CocoaMQTTDeliver, wantToSend frame: Frame) {
         if let publish = frame as? FramePublish {
             let msgid = publish.msgid
-            guard let message = sendingMessages[msgid] else {
+            guard let message = sendingMessages.message(for: msgid) else {
                 printError("Want send \(frame), but not found in CocoaMQTT cache")
                 return
             }
